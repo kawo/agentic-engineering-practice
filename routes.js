@@ -12,13 +12,13 @@
 
 const express = require('express');
 const router = express.Router();
-const { db } = require('./DB');
-const { authenticate } = require('./auth');
+const { db } = require('./src/db/connection');
+const { authenticate } = require('./src/middleware/auth');
 const UserController = require('./UserController');
 const { getTasks, getTaskById } = require('./get-tasks');
 const { getProjectStats } = require('./projectHelpers');
-const { isNonEmptyString } = require('./utils');
-const { VALID_TASK_STATUSES } = require('./misc/constants');
+const { isNonEmptyString } = require('./src/utils/validation');
+const { VALID_TASK_STATUSES } = require('./src/utils/constants');
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 

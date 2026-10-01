@@ -1,7 +1,7 @@
 process.env.NODE_ENV = 'test';
 
 const request = require('supertest');
-const app = require('../index');
+const app = require('../src/index');
 
 // These endpoints take no input, so the only error case is a path that
 // doesn't exist.
