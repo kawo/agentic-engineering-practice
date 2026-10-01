@@ -2,7 +2,7 @@
 
 A REST API for a simple task management service. Users can create tasks, assign them to projects, mark them complete, add comments, and filter by status.
 
-**Stack:** Node.js · Express · SQLite (via `better-sqlite3`) · Jest
+**Stack:** Node.js · Express 5 · SQLite (via `better-sqlite3`) · Jest
 
 ---
 
@@ -27,7 +27,25 @@ The server starts on port 3000. Visit `http://localhost:3000/health` to confirm 
 | Projects | `/projects` |
 | Tasks | `/tasks` |
 | Comments | `/tasks/:id/comments` |
-| Tags | `/tags` |
+| Tags | `/tags`, `/tasks/:id/tags` |
+
+---
+
+## Project layout
+
+```
+src/
+  index.js          app setup and router mounting
+  routes/           one Express router per resource
+  services/         business logic and validation
+  db/               connection, schema, seed script
+    queries/        SQL, one module per resource
+  middleware/       auth, request logging, error handling
+  utils/            shared helpers and constants
+tests/              one test file per resource
+```
+
+Requests flow one way: a route calls a service, and the service calls queries.
 
 ---
 

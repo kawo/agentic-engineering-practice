@@ -13,8 +13,7 @@ Use this guide whenever you write or extend tests for the Taskr API. It covers f
 
 - Put test files in `tests/`, named after the resource, **lowercase**: `tests/tasks.test.js`, `tests/projects.test.js`, `tests/comments.test.js`, `tests/tags.test.js`.
 - Use one file per resource, and put all of that resource's endpoints in it, including nested ones (`POST /tasks/:id/comments` goes in `comments.test.js`).
-- The existing `tests/userTest.js` and `tests/test-projects.js` break this rule. That's a known problem that will be standardised later. Don't copy those names, and don't rename those files unless asked.
-- Files named `*.test.js` in `tests/` already match `testMatch` in `package.json`, so a new file runs under `npm test` without any config change. A file named any other way **will not run**.
+- Files named `*.test.js` in `tests/` match `testMatch` in `package.json`, so a new file runs under `npm test` without any config change. A file named any other way **will not run**.
 
 ## 2. Setup: in-memory database, no external dependencies
 
@@ -24,9 +23,9 @@ Every test file starts with the same setup. `tests/tasks.test.js` is the referen
 process.env.NODE_ENV = 'test'; // must come before requiring the app or DB
 
 const request = require('supertest');
-const app = require('../index');
-const { db } = require('../DB');
-const { createSchema } = require('./schema');
+const app = require('../src/index');
+const { db } = require('../src/db/connection');
+const { createSchema } = require('../src/db/schema');
 
 beforeAll(() => {
   createSchema(db);
@@ -41,13 +40,11 @@ beforeEach(() => {
 
 Why each piece matters:
 
-- **`NODE_ENV = 'test'` first.** `DB.js` uses `:memory:` only when `NODE_ENV=test` is set at the moment it is first required. Jest sets `NODE_ENV=test` by default, but only when `NODE_ENV` isn't already set. Setting it explicitly in the file means tests can never write to the real `taskr.db`, whatever the shell environment.
-- **`createSchema(db)` from `tests/schema.js`** builds the tables. If a feature changes the schema, update `tests/schema.js` as well as `db/seed.js`, or the tests will run against an out-of-date schema.
+- **`NODE_ENV = 'test'` first.** `src/db/connection.js` uses `:memory:` only when `NODE_ENV=test` is set at the moment it is first required. Jest sets `NODE_ENV=test` by default, but only when `NODE_ENV` isn't already set. Setting it explicitly in the file means tests can never write to the real `taskr.db`, whatever the shell environment.
+- **`createSchema(db)` from `src/db/schema.js`** builds the tables. It is the same schema the seed script uses, so the tests always run against the real schema.
 - **Clear every table in `beforeEach`**, in child-to-parent order (foreign keys are on). Each test then starts from a known, empty state and doesn't depend on the order tests run in.
 - **Use supertest against the exported app** (`request(app)`). Never call `app.listen` or start a server in a test.
-- **No external calls.** Anything that would reach outside the process must be a stub or a mock. `sendEmail.js` already only logs.
-
-After the refactor the app may be exported from `src/index.js`. Require it from wherever it is exported at the time.
+- **No external calls.** Anything that would reach outside the process must be a stub or a mock. `src/services/email.js` already only logs.
 
 ## 3. Coverage: happy path + at least two error cases per endpoint
 

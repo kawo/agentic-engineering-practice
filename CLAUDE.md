@@ -8,7 +8,7 @@ Taskr is a REST API for task management: users, projects, tasks, comments and ta
 
 Before starting a task, read the context file that matches it, and follow it:
 
-- **`.claude/context/api-conventions.md`**: any task involving API routes or endpoints (adding, changing or moving a route, or the handler or service code behind it).
+- **`.claude/context/api-conventions.md`**: any task involving API routes or endpoints (adding, changing or moving a route, or the handler, service or query code behind it).
 - **`.claude/context/testing-standards.md`**: any task involving tests or test coverage (writing, fixing or extending tests, or checking coverage).
 
 If a task involves both, such as adding an endpoint together with its tests, read both.
@@ -22,52 +22,63 @@ npm run db:reset       # delete taskr.db and re-seed (uses `rm -f`, so needs a P
 npm run dev            # start with node --watch on port 3000 (PORT env overrides)
 npm start
 npm test               # run all tests
-npx jest tests/userTest.js            # run one test file
+npx jest tests/users.test.js                   # run one test file
 npx jest tests/tasks.test.js -t "filters by"   # run tests whose name matches
 ```
 
-Jest only picks up files matching `testMatch` in `package.json`: `tests/*.test.js`, `tests/userTest.js` and `tests/test-projects.js`. A new test file with any other name won't run unless it is named `*.test.js` or added to `testMatch`.
+Jest runs every file matching `tests/*.test.js`.
 
 ## Architecture
 
-- **Entry point:** `index.js` builds the Express app and exports it (it only calls `listen` when run directly), so tests import it with supertest. A few routes (`/` and `POST /webhooks/task-update`) are defined in `index.js` itself rather than in `routes.js`.
-- **Routing:** almost every route lives in the single router in `routes.js`. Most handlers validate input inline and query the database directly with `db.prepare(...)`. There is no service or repository layer.
-- **Inconsistent layering:** only users go through `UserController.js` (which throws errors carrying a `.status` that the route turns into the HTTP code). Task reads go through `get-tasks.js`, and project stats through `projectHelpers.js`. Everything else is inline in `routes.js`.
-- **Database:** `DB.js` exports one shared `db` connection. It uses `:memory:` when `NODE_ENV=test`, otherwise `DB_PATH` or `taskr.db`. Foreign keys and WAL mode are on.
-- **Schema is defined twice:** in `db/seed.js` (for the real DB) and in `tests/schema.js` (for tests). Any schema change must be made in both.
-- **Circular dependency:** `projectHelpers.formatProjectSummary` requires `routes.js`, which exports `getTasksForProject`. `routes.js` requires `projectHelpers` lazily inside the `GET /projects/:id` handler to avoid a load-time cycle. Keep those requires lazy.
-- **Auth:** `auth.js` checks the `x-api-key` header against `API_KEY` (default `dev-key`). It is applied only to `DELETE /users/:id` and `DELETE /projects/:id`.
-- **Task status:** must be one of `VALID_TASK_STATUSES` in `misc/constants.js` (`active`, `completed`, `archived`), also enforced by a SQL `CHECK`. `PUT /tasks/:id` sets `completed_at` when a task moves to `completed` and clears it when it leaves.
-- **Stubs:** `sendEmail.js` only logs (it's called when a user is created). `misc/oldRoutes.js` and `misc/temp.js` are dead code and not loaded anywhere.
+```
+src/
+  index.js              builds the app, mounts every router, exports the app
+  routes/               one Express router per resource; parse the request, call a service, send the response
+  services/             business logic and validation; throw HttpError for client errors
+  db/
+    connection.js       the shared better-sqlite3 connection
+    schema.js           createSchema(db): the only definition of the schema
+    seed.js             sample data for taskr.db (npm run db:seed)
+    queries/            all SQL, one module per resource
+  middleware/           auth, request-logger, error-handler
+  utils/                http-error, constants, validation
+tests/                  <resource>.test.js, run against an in-memory database
+```
 
-## Known structural problems (intentional, pending refactor)
+- **Layers:** routes call services, services call queries. Routes require only services (and `middleware/auth.js`). Services may require any query module, `utils/` and other services such as `services/email.js`. Query modules require only `db/connection.js`. Nothing except `src/index.js` requires a route file.
+- **Entry point:** `src/index.js` builds the Express app and exports it. It only calls `listen` when run directly, so tests import it with supertest. Routers are mounted with `app.use('/<resource>', <resource>Router)`. Nested resources are mounted at their full path, with `mergeParams: true` (`/tasks/:id/comments` and `/tasks/:id/tags`).
+- **Errors:** services throw `HttpError(status, message)` from `utils/http-error.js`. Express 5 forwards thrown errors and rejected promises to `middleware/error-handler.js`, which responds with `{ error: message }` and the error's status (500 if it has none, logging the stack). Route handlers have no `try/catch`.
+- **Database:** `db/connection.js` uses `:memory:` when `NODE_ENV=test`, otherwise `DB_PATH` or `taskr.db`. Foreign keys and WAL mode are on.
+- **Auth:** `middleware/auth.js` checks the `x-api-key` header against `API_KEY` (default `dev-key`). It is applied only to `DELETE /users/:id` and `DELETE /projects/:id`.
+- **Task status:** must be one of `VALID_TASK_STATUSES` in `utils/constants.js` (`active`, `completed`, `archived`), also enforced by a SQL `CHECK`. `PUT /tasks/:id` sets `completed_at` when a task moves to `completed` and clears it when it leaves.
+- **Stubs:** `services/email.js` only logs (it's called when a user is created). `services/webhooks.js` only logs the payload.
 
-This codebase has structural problems on purpose. A future refactor will fix them. Until then, understand the current state, but **do not copy these patterns into new code**. Existing code that reads like this is not a style guide.
+## Known API quirks, kept on purpose
 
-- **God-file router:** `routes.js` holds almost every route for every resource (see the TODOs at the top of the file). New routes go in their own route file (see "Never do these things"). Don't move more routes into `index.js`.
-- **No data-access layer:** handlers call `db.prepare(...)` inline. In new or changed code, keep SQL out of the route handler and put it in a function the handler calls.
-- **Validation copied into each handler:** checks are repeated per route. Reuse the existing helpers in `utils.js` instead of writing another inline variant. Put new helpers in the most specific module that fits.
-- **Inconsistent layering:** users go through a controller, tasks through `get-tasks.js`, project stats through `projectHelpers.js`, everything else inline. Don't add a fourth style. Follow the `UserController` pattern (logic outside the route, errors carry `.status`) and don't add more lookalike one-off helper modules.
-- **Inconsistent error handling:** some handlers wrap their work in `try/catch` and format errors themselves, others don't, even though `index.js` mounts the central `errorHandler` from `middleware.js`. Prefer throwing errors with a `.status` and letting them reach the handler, rather than copying the per-route `try/catch` blocks.
-- **Circular dependency** between `routes.js` and `projectHelpers.js`. Don't add new cross-requires between route and helper modules. Helpers should not require `routes.js`.
-- **Inconsistent file naming:** `DB.js`, `UserController.js`, `get-tasks.js`, `projectHelpers.js`, plus a `misc/` grab-bag. Test files are also named inconsistently (`userTest.js`, `test-projects.js`). Name new source files in camelCase and new tests `<resource>.test.js` (see Testing). Don't put anything new in `misc/`.
-- **Schema duplicated** in `db/seed.js` and `tests/schema.js`. Keep both in sync, and don't add a third copy.
-- **Dead code** in `misc/oldRoutes.js` and `misc/temp.js`. Don't import it, extend it, or use it as a reference.
+The refactor into `src/` did not change any API behaviour, including these. Tests pin them. Don't "fix" them as a side effect of another change. Change them only when asked, and update the tests in the same change.
 
-When a task touches one of these areas, make the change it asks for without doing the larger refactor on the side, unless asked. If following the existing pattern and following this guidance conflict, say so rather than picking one silently.
+- `POST /tasks` returns **400** (not 404) for an unknown `project_id` or `assignee_id`.
+- `PUT /users/:id` with an email that belongs to another user returns **500**, not 409.
+- Deleting a user or project that tasks still reference returns **500** (the foreign key rejects it).
+- `PUT /tasks/:id` doesn't check that a new `project_id` or `assignee_id` exists.
 
 ## Never do these things
 
-- **Never add new route logic to `routes.js`.** It is already too large. New routes belong in a dedicated route file (e.g. one router per resource), mounted in `index.js`.
-- **Never add a new utility function to `utils.js` without first checking whether it belongs in a more specific module.** `utils.js` is a catch-all. Only add to it when nothing more specific fits.
-- **Never import from the dead files in `misc/` (`misc/oldRoutes.js`, `misc/temp.js`).** That code is dead and scheduled for removal. The one exception is `misc/constants.js`, which is still live (`index.js` and `routes.js` import `PORT` and `VALID_TASK_STATUSES` from it).
+- **Never put SQL outside `src/db/queries/`.** Routes and services don't call `db.prepare`.
+- **Never put business logic or validation in a route handler.** It belongs in the service.
+- **Never send an error response from a route handler.** Throw `HttpError` from the service and let the error handler respond.
+- **Never require a route file from anywhere except `src/index.js`.** That is what keeps the dependency graph one-way.
+- **Never define the schema anywhere except `src/db/schema.js`.**
+- **Never add a catch-all helper module.** Put a helper in the most specific module that fits. `utils/` is only for code used across resources.
+
+## Naming
+
+All files and folders under `src/` and `tests/` use lowercase kebab-case (`error-handler.js`, `http-error.js`). Inside `routes/`, `services/` and `db/queries/`, files are named after the resource in lowercase plural (`tasks.js`), and the folder says which layer it is. Routers are exported by name as `<resource>Router`.
 
 ## Testing
 
-Each test file sets `process.env.NODE_ENV = 'test'` **before** requiring `index.js`/`DB.js`, which makes the database in-memory. It then calls `createSchema(db)` from `tests/schema.js` in `beforeAll` and clears every table in `beforeEach`. Follow the same pattern in new test files. Tests don't need a seeded `taskr.db`.
-
-Test files should be named `<resource>.test.js`, for example `tasks.test.js`, `projects.test.js` or `comments.test.js`. `tasks.test.js` already follows this. `userTest.js` and `test-projects.js` don't. That inconsistency is a known problem and will be standardised later, so don't copy those names, and don't rename them unless asked. Files named this way are picked up by the existing `tests/*.test.js` pattern in `testMatch`, so no `package.json` change is needed.
+Each test file sets `process.env.NODE_ENV = 'test'` **before** requiring `src/index.js` or `src/db/connection.js`, which makes the database in-memory. It then calls `createSchema(db)` from `src/db/schema.js` in `beforeAll` and clears every table in `beforeEach`. Follow the same pattern in new test files. Tests don't need a seeded `taskr.db`. See `.claude/context/testing-standards.md` for the full standards.
 
 ## Custom commands
 
-`.claude/commands/` has `/commit-push`, `/commit-push-pr` and `/git-branch`. `/commit-push` and `/git-branch` stage everything with `git add -A`.
+`.claude/commands/` has `/commit-push`, `/commit-push-pr` and `/git-branch`. `/commit-push` and `/git-branch` stage everything with `git add -A`. `.gitignore` keeps `node_modules/` and the `taskr.db` files out.

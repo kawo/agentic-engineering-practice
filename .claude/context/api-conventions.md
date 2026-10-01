@@ -1,117 +1,118 @@
 # Adding a new API endpoint to Taskr
 
-Use this guide whenever you add an endpoint to the Taskr API. It describes the layout the codebase is moving to in the planned refactor. New endpoints should follow it now, so they don't need to be moved later.
+Use this guide whenever you add or change an endpoint in the Taskr API. Every existing resource follows it. Use `src/routes/comments.js`, `src/services/comments.js` and `src/db/queries/comments.js` as a small, complete reference.
 
-## Current state vs. target
+An endpoint touches three layers, and each layer only calls the one below it:
 
-Most of the codebase does not follow these conventions yet. Existing routes live in the root-level `routes.js`, and the app is built in the root-level `index.js`. Do not use either file as a model, and do not add new route logic to `routes.js` (see "Never do these things" in `CLAUDE.md`).
+```
+src/routes/<resource>.js      parse the request, call a service, send the response
+src/services/<resource>.js    validation and business rules; throws HttpError
+src/db/queries/<resource>.js  SQL only
+```
 
-If `src/index.js` does not exist yet, register the new router in the root `index.js` in the same way (step 4), and mention this in your summary so it can be moved during the refactor. Create `src/routes/` and `src/services/` if they don't exist.
+For an endpoint on an existing resource, add to that resource's three files. For a new resource, create all three, plus the steps below.
 
 ## Steps
 
-### 1. Create the route file in `src/routes/`
+### 1. Add the SQL to `src/db/queries/<resource>.js`
 
-- Name the file after the resource, **lowercase plural**: `src/routes/comments.js`, `src/routes/tags.js`, `src/routes/projects.js`.
-- One file per resource. Don't put two resources in one file.
+- Name the file after the resource, **lowercase plural** (`attachments.js`).
+- Each function runs one statement and returns plain data: rows, a row, `lastInsertRowid` or `changes`.
+- No validation and no `HttpError` here. Query modules require only `../connection`.
 
-### 2. Export a named Express Router
+```js
+const { db } = require('../connection');
 
-Create the router with `express.Router()` and export it by name as `<resource>Router`. Don't use a default export.
+function findByTaskId(taskId) {
+  return db.prepare('SELECT * FROM attachments WHERE task_id = ? ORDER BY created_at ASC').all(taskId);
+}
+
+function insert({ task_id, url }) {
+  return db.prepare('INSERT INTO attachments (task_id, url) VALUES (?, ?)').run(task_id, url).lastInsertRowid;
+}
+
+module.exports = { findByTaskId, insert };
+```
+
+### 2. Put the logic in `src/services/<resource>.js`
+
+The service validates input, checks that referenced records exist, applies business rules and calls queries. It may require any query module, `utils/` and other services such as `services/email.js`. It never requires a route file.
+
+When something is wrong, **throw `HttpError(status, message)`**:
+
+```js
+const attachmentsQueries = require('../db/queries/attachments');
+const tasksQueries = require('../db/queries/tasks');
+const { HttpError } = require('../utils/http-error');
+const { isNonEmptyString } = require('../utils/validation');
+
+function addAttachment(taskId, { url }) {
+  if (!tasksQueries.findById(taskId)) throw new HttpError(404, 'Task not found');
+  if (!url || !isNonEmptyString(url)) throw new HttpError(400, 'url is required');
+  const id = attachmentsQueries.insert({ task_id: taskId, url });
+  return attachmentsQueries.findById(id);
+}
+
+module.exports = { addAttachment };
+```
+
+- Use the status codes the API uses elsewhere: `400` for invalid input, `401` for auth, `404` for a missing resource, `409` for conflicts.
+- To turn a database constraint error into a 409, catch it in the service and re-throw an `HttpError`. Re-throw anything else unchanged. See `createTag` in `services/tags.js`.
+- Name service functions after what they do (`listComments`, `addComment`), with one function per route handler.
+
+### 3. Keep the route handler thin
+
+In `src/routes/<resource>.js`, a handler only:
+
+1. reads the request: `parseInt` the path ids, and pass `req.body` or `req.query` through,
+2. calls one service function,
+3. sends the result with the right success status (`res.json(...)` or `res.status(201).json(...)`).
+
+No SQL, no validation, no `try/catch` and no error responses. Express 5 sends anything thrown in a handler, or a rejected promise from an `async` handler, to the error handler.
 
 ```js
 const express = require('express');
-const commentsService = require('../services/comments');
+const attachmentsService = require('../services/attachments');
 
-const commentsRouter = express.Router();
+// Mounted at /tasks/:id/attachments; mergeParams exposes the task id.
+const attachmentsRouter = express.Router({ mergeParams: true });
 
-// ... route handlers ...
-
-module.exports = { commentsRouter };
-```
-
-Paths inside the router are relative to where it is mounted. Use `'/'` and `'/:id'`, not `'/comments/:id'`.
-
-### 3. Keep handlers thin: call a service function
-
-Every route handler calls a matching function in `src/services/<resource>.js`. Business logic goes in the service: database queries, rules about state changes, side effects. The handler's job is only to:
-
-1. read the request (`req.params`, `req.query`, `req.body`) and reject malformed input,
-2. call the service function,
-3. send the response with the right status code.
-
-There should be no `db.prepare(...)` calls in a route file.
-
-```js
-// src/services/comments.js
-const { db } = require('../../DB');
-
-function listCommentsForTask(taskId) {
-  const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
-  if (!task) {
-    const err = new Error('task not found');
-    err.status = 404;
-    throw err;
-  }
-  return db.prepare('SELECT * FROM comments WHERE task_id = ? ORDER BY created_at').all(taskId);
-}
-
-module.exports = { listCommentsForTask };
-```
-
-Name service functions after what they do (`listCommentsForTask`, `createComment`), and keep a one-to-one match with the handlers that call them.
-
-### 4. Pass errors to `next` with a status and message
-
-Don't send error responses from inside a handler with `res.status(...).json(...)`. Pass the error to Express's `next` with a status code and a message, and let the central `errorHandler` (from `middleware.js`, mounted last in the app) send the response:
-
-```js
-commentsRouter.get('/', (req, res, next) => {
-  const taskId = Number(req.params.taskId);
-  if (!Number.isInteger(taskId)) {
-    return next({ status: 400, message: 'taskId must be an integer' });
-  }
-  try {
-    res.json(commentsService.listCommentsForTask(taskId));
-  } catch (err) {
-    next({ status: err.status || 500, message: err.message });
-  }
+attachmentsRouter.post('/', (req, res) => {
+  res.status(201).json(attachmentsService.addAttachment(parseInt(req.params.id), req.body));
 });
+
+module.exports = { attachmentsRouter };
 ```
 
-- Validation failures: `next({ status: 400, message: '...' })`, then `return`.
-- Errors thrown by services carry a `.status`. Forward the status and message to `next`, defaulting to `500`.
-- Use the same status codes the API uses elsewhere: `400` for invalid input, `401` for auth, `404` for a missing resource, `409` for conflicts such as unique constraints.
+- Export the router **by name** as `<resource>Router`. Don't use a default export. A file may export two routers when one resource has both a top-level and a nested path (see `routes/tags.js`).
+- Paths inside the router are relative to where it is mounted. Use `'/'` and `'/:id'`.
+- For auth, add `authenticate` from `../middleware/auth` to the route, as `DELETE /users/:id` does.
 
-### 5. Register the router in `src/index.js`
+### 4. Register the router in `src/index.js`
 
-Import the named router and mount it with `app.use`, using the resource path. Do this before the `errorHandler` is mounted.
+Require the named router and mount it with `app.use`, using the resource path, before `app.use(errorHandler)`:
 
 ```js
-const { commentsRouter } = require('./routes/comments');
+const { attachmentsRouter } = require('./routes/attachments');
 
-app.use('/comments', commentsRouter);
+app.use('/tasks/:id/attachments', attachmentsRouter);
 ```
 
-For a resource nested under another (for example `/tasks/:taskId/comments`), mount it at the full nested path, and create its router with `express.Router({ mergeParams: true })` so it can read the parent's params:
-
-```js
-app.use('/tasks/:taskId/comments', commentsRouter);
-```
+Nested resources are mounted at their full path, and their router is created with `express.Router({ mergeParams: true })`. Without it, `req.params.id` is undefined.
 
 ## Other things to keep in mind
 
-- **Auth:** if the endpoint needs auth, add the `authenticate` middleware from `auth.js` to that route, as `DELETE /users/:id` does.
-- **Schema changes:** if the endpoint needs a new table or column, change both `db/seed.js` and `tests/schema.js`.
-- **Tests:** add tests in `tests/<resource>.test.js` (for example `tests/comments.test.js`), following the setup pattern in the Testing section of `CLAUDE.md`. Test the success path, every validation failure, and the not-found case.
-- **Constants:** shared values such as `VALID_TASK_STATUSES` come from `misc/constants.js`. Never import from `misc/oldRoutes.js` or `misc/temp.js`.
+- **Schema changes:** add tables and columns in `src/db/schema.js` only. It is used by both the seed script and the tests. Add sample data in `src/db/seed.js` if it helps.
+- **Constants:** shared values such as `VALID_TASK_STATUSES` and the page sizes live in `src/utils/constants.js`.
+- **Naming:** all new files use lowercase kebab-case.
+- **Tests:** add or extend `tests/<resource>.test.js` following `.claude/context/testing-standards.md`.
+- **Behaviour:** don't change an existing endpoint's responses or error messages unless the task asks for it. The tests pin them, and so does the list of known quirks in `CLAUDE.md`.
 
 ## Checklist
 
-- [ ] `src/routes/<resource>.js` exists, lowercase plural, one resource
-- [ ] Exports `{ <resource>Router }`, a named Express Router
-- [ ] Every handler calls a function in `src/services/<resource>.js`. No SQL or business rules in the handler
-- [ ] Errors go to `next({ status, message })`. No `res.status(4xx/5xx).json(...)` in handlers
-- [ ] Router mounted in `src/index.js` with `app.use('/<resource>', <resource>Router)`, before `errorHandler` (or in root `index.js` if `src/index.js` doesn't exist yet, and say so)
-- [ ] Tests added in `tests/<resource>.test.js`
-- [ ] Nothing new added to `routes.js`
+- [ ] SQL only in `src/db/queries/<resource>.js`
+- [ ] Validation and rules in `src/services/<resource>.js`. Errors thrown as `HttpError(status, message)`
+- [ ] Handlers in `src/routes/<resource>.js` only parse, call one service function and send the success response. No `try/catch`, no error responses
+- [ ] Router exported as `{ <resource>Router }` and mounted in `src/index.js` before `errorHandler` (`mergeParams: true` if nested)
+- [ ] Schema changes only in `src/db/schema.js`
+- [ ] Tests added in `tests/<resource>.test.js`, and `npm test` passes
