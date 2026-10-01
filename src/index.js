@@ -5,6 +5,7 @@ const { requestLogger } = require('./middleware/request-logger');
 const { errorHandler } = require('./middleware/error-handler');
 const { healthRouter } = require('./routes/health');
 const { webhooksRouter } = require('./routes/webhooks');
+const { usersRouter } = require('./routes/users');
 
 const app = express();
 
@@ -13,6 +14,7 @@ app.use(requestLogger);
 
 app.use('/', healthRouter);
 app.use('/webhooks', webhooksRouter);
+app.use('/users', usersRouter);
 app.use(router);
 
 app.use(errorHandler);
