@@ -79,6 +79,12 @@ All files and folders under `src/` and `tests/` use lowercase kebab-case (`error
 
 Each test file sets `process.env.NODE_ENV = 'test'` **before** requiring `src/index.js` or `src/db/connection.js`, which makes the database in-memory. It then calls `createSchema(db)` from `src/db/schema.js` in `beforeAll` and clears every table in `beforeEach`. Follow the same pattern in new test files. Tests don't need a seeded `taskr.db`. See `.claude/context/testing-standards.md` for the full standards.
 
+## Verification
+
+After completing any significant change, run `/verify-app` before committing. **Do not commit if any tests are failing.**
+
+The test suite uses supertest and covers every API endpoint, so a passing run confirms the full application is working correctly.
+
 ## Custom commands
 
-`.claude/commands/` has `/commit-push`, `/commit-push-pr`, `/git-branch` and `/verify-app`. `/commit-push` and `/git-branch` stage everything with `git add -A`. `/verify-app` runs the full test suite serially (`npm test -- --runInBand`) and fixes the implementation, never the tests, until everything passes. Run it after any significant change. `.gitignore` keeps `node_modules/` and the `taskr.db` files out.
+`.claude/commands/` has `/commit-push`, `/commit-push-pr`, `/git-branch` and `/verify-app`. `/commit-push` and `/git-branch` stage everything with `git add -A`. `/verify-app` runs the full test suite serially (`npm test -- --runInBand`) and fixes the implementation, never the tests, until everything passes (see Verification). `.gitignore` keeps `node_modules/` and the `taskr.db` files out.
