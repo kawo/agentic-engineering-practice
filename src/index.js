@@ -1,3 +1,9 @@
+// Entry point for the Taskr API. Builds the Express app: parses JSON bodies,
+// logs each request, mounts one router per resource, and sends errors to the
+// central error handler, which must be mounted last. Starts listening on PORT
+// only when run directly (npm start / npm run dev); tests require the
+// exported app and call it with supertest instead.
+
 const express = require('express');
 const { PORT } = require('./utils/constants');
 const { requestLogger } = require('./middleware/request-logger');
