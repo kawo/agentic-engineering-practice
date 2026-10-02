@@ -1,3 +1,8 @@
+/**
+ * @description Creates every table that does not exist yet.
+ * @param {Database} db - The better-sqlite3 connection to create the tables in.
+ * @returns {void} Nothing.
+ */
 function createSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
