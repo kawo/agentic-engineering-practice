@@ -3,3 +3,4 @@ taskr.db
 taskr.db-wal
 taskr.db-shm
 .claude/settings.local.json
+.claude/hook.log
