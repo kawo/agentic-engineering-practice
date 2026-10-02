@@ -81,4 +81,4 @@ Each test file sets `process.env.NODE_ENV = 'test'` **before** requiring `src/in
 
 ## Custom commands
 
-`.claude/commands/` has `/commit-push`, `/commit-push-pr` and `/git-branch`. `/commit-push` and `/git-branch` stage everything with `git add -A`. `.gitignore` keeps `node_modules/` and the `taskr.db` files out.
+`.claude/commands/` has `/commit-push`, `/commit-push-pr`, `/git-branch` and `/verify-app`. `/commit-push` and `/git-branch` stage everything with `git add -A`. `/verify-app` runs the full test suite serially (`npm test -- --runInBand`) and fixes the implementation, never the tests, until everything passes. Run it after any significant change. `.gitignore` keeps `node_modules/` and the `taskr.db` files out.
